@@ -5,8 +5,15 @@ import Link from "next/link";
 import type { ProjectSpec } from "@/types";
 import { simulate, wireKey, scoreCircuit, type Wire, type Fault } from "@/lib/simulator";
 import { saveResult } from "@/lib/progress";
-import { CANVAS_W, CANVAS_H, COMPONENT_SLOTS, BUILD_STEPS, CELL } from "./lab-config";
+import {
+  CANVAS_W,
+  CANVAS_H,
+  CELL,
+  SLOTS_BY_PROJECT,
+  BUILD_STEPS_BY_PROJECT,
+} from "./lab-config";
 import { ComponentSymbol } from "./component-symbol";
+import { LabThreeView } from "./three-view";
 import { AiPanel } from "./ai-panel";
 import { VivaPanel } from "./viva-panel";
 import { Button } from "@/components/ui/button";
@@ -31,6 +38,9 @@ function wiresFromPairs(pairs: [string, string][]): Wire[] {
 
 export function LabClient({ project, mode }: Props) {
   const allIds = useMemo(() => project.requiredComponents.map((c) => c.id), [project]);
+  const slots = SLOTS_BY_PROJECT[project.id] ?? {};
+  const buildSteps = BUILD_STEPS_BY_PROJECT[project.id] ?? [];
+
   const [placed, setPlaced] = useState<Set<string>>(() => new Set(mode === "learn" ? allIds : []));
   const [wires, setWires] = useState<Wire[]>(() =>
     mode === "learn" ? wiresFromPairs(project.expectedWires) : [],
@@ -38,6 +48,8 @@ export function LabClient({ project, mode }: Props) {
   const [pendingTerminal, setPendingTerminal] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [pressed, setPressed] = useState<Set<string>>(new Set());
+  const [switchesOn, setSwitchesOn] = useState<Set<string>>(new Set());
+  const [view3d, setView3d] = useState(true);
   const [checked, setChecked] = useState<{ faults: Fault[]; score?: ScoreRows } | null>(null);
   const [tab, setTab] = useState<Tab>("circuit");
   const [showRef, setShowRef] = useState(false);
@@ -46,11 +58,19 @@ export function LabClient({ project, mode }: Props) {
   const placedComponents = project.requiredComponents.filter((c) => placed.has(c.id));
 
   const sim = useMemo(() => {
-    if (!running) { lastCoils.current = {}; return null; }
-    const s = simulate(project, wires, pressed, lastCoils.current);
+    if (!running) {
+      lastCoils.current = {};
+      return null;
+    }
+    const s = simulate(project, wires, pressed, switchesOn, lastCoils.current);
     lastCoils.current = s.coils;
     return s;
-  }, [project, wires, pressed, running]);
+  }, [project, wires, pressed, switchesOn, running]);
+
+  const coilOn = (id: string) => !!sim?.coils[id];
+  const motorState = sim?.motor ?? "stopped";
+  const energized = sim?.energized ?? new Set<string>();
+  const lamps = sim?.lamps ?? {};
 
   const faultTerminals = useMemo(() => {
     const s = new Set<string>();
@@ -78,6 +98,15 @@ export function LabClient({ project, mode }: Props) {
 
   function placeComponent(id: string) {
     setPlaced((p) => new Set(p).add(id));
+  }
+
+  function toggleSwitch(id: string) {
+    setSwitchesOn((p) => {
+      const n = new Set(p);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
   }
 
   function onTerminalClick(terminalId: string) {
@@ -109,7 +138,7 @@ export function LabClient({ project, mode }: Props) {
   }
 
   function runCheck() {
-    const faults = simulate(project, wires, pressed).faults;
+    const faults = simulate(project, wires, pressed, switchesOn, lastCoils.current).faults;
     const rows = scoreCircuit(project, wires);
     const total = rows.reduce((s, r) => s + (r.earned ? r.points : 0), 0);
     const max = rows.reduce((s, r) => s + r.points, 0);
@@ -123,17 +152,14 @@ export function LabClient({ project, mode }: Props) {
     setPendingTerminal(null);
     setRunning(false);
     setPressed(new Set());
+    setSwitchesOn(new Set());
     setChecked(null);
   }
-
-  const coilOn = (id: string) => !!sim?.coils[id];
-  const motorState = sim?.motor ?? "stopped";
-  const energized = sim?.energized ?? new Set<string>();
 
   function terminalXY(terminalId: string): { x: number; y: number } | null {
     const [compId] = terminalId.split(":");
     const spec = project.requiredComponents.find((c) => c.id === compId);
-    const slot = COMPONENT_SLOTS[compId];
+    const slot = slots[compId];
     const t = spec?.terminals.find((t) => t.id === terminalId);
     if (!spec || !slot || !t) return null;
     return {
@@ -142,15 +168,14 @@ export function LabClient({ project, mode }: Props) {
     };
   }
 
-  const circuitCanvas = (
+  const circuitCanvas2d = (
     <div className="relative h-full w-full overflow-auto rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
       <svg
         viewBox={"0 0 " + CANVAS_W + " " + CANVAS_H}
         className="h-auto w-full min-w-[720px]"
         role="img"
-        aria-label="Circuit workspace"
+        aria-label="Circuit workspace (2D)"
       >
-        {/* grid dots */}
         {Array.from({ length: Math.ceil(CANVAS_W / 40) }).map((_, i) =>
           Array.from({ length: Math.ceil(CANVAS_H / 40) }).map((_, j) => (
             <circle key={i + "-" + j} cx={i * 40 + 20} cy={j * 40 + 20} r={1} className="fill-zinc-200 dark:fill-zinc-800" />
@@ -160,22 +185,28 @@ export function LabClient({ project, mode }: Props) {
         {/* status strip */}
         <g>
           <rect
-            x={CANVAS_W - 210}
+            x={CANVAS_W - 240}
             y={12}
-            width={190}
+            width={220}
             height={30}
             rx={6}
-            fill={motorState === "forward" ? "#dcfce7" : motorState === "reverse" ? "#fef9c3" : "#f4f4f5"}
+            fill={motorState === "forward" ? "#dcfce7" : motorState === "reverse" ? "#fef9c3" : lamps["B"] ? "#dcfce7" : "#f4f4f5"}
           />
           <text
-            x={CANVAS_W - 115}
+            x={CANVAS_W - 130}
             y={32}
             textAnchor="middle"
             fontSize={13}
             fontWeight={700}
-            fill={motorState === "stopped" ? "#71717a" : "#166534"}
+            fill={motorState === "stopped" && !lamps["B"] ? "#71717a" : "#166534"}
           >
-            {running ? "MOTOR: " + motorState.toUpperCase() : "CIRCUIT OFF"}
+            {running
+              ? motorState !== "stopped"
+                ? "MOTOR: " + motorState.toUpperCase()
+                : lamps["B"]
+                  ? "BULB: ON"
+                  : "CIRCUIT ON - NO OUTPUT"
+              : "CIRCUIT OFF"}
           </text>
         </g>
 
@@ -205,8 +236,8 @@ export function LabClient({ project, mode }: Props) {
           <ComponentSymbol
             key={spec.id}
             spec={spec}
-            x={COMPONENT_SLOTS[spec.id].x}
-            y={COMPONENT_SLOTS[spec.id].y}
+            x={slots[spec.id]?.x ?? 0}
+            y={slots[spec.id]?.y ?? 0}
             energized={spec.kind === "supply" ? running : energized.has(spec.terminals[0]?.id ?? "")}
             coilOn={coilOn(spec.id)}
             motorState={motorState}
@@ -214,13 +245,15 @@ export function LabClient({ project, mode }: Props) {
             activeTerminal={pendingTerminal}
             faultTerminals={faultTerminals}
             pressed={pressed.has(spec.id)}
+            switchOn={switchesOn.has(spec.id)}
+            lampOn={!!lamps[spec.id]}
           />
         ))}
       </svg>
 
-      {/* press-and-hold start buttons for Run mode */}
+      {/* run-mode controls: momentary buttons + switch toggles */}
       {running && (
-        <div className="absolute bottom-3 left-3 flex gap-2">
+        <div className="absolute bottom-3 left-3 flex flex-wrap gap-2">
           {["SB-F", "SB-R"].map((id) => {
             const spec = project.requiredComponents.find((c) => c.id === id);
             if (!spec || !placed.has(id)) return null;
@@ -239,6 +272,20 @@ export function LabClient({ project, mode }: Props) {
               </button>
             );
           })}
+          {project.requiredComponents
+            .filter((c) => c.kind === "switch" && placed.has(c.id))
+            .map((c) => (
+              <button
+                key={c.id}
+                onClick={() => toggleSwitch(c.id)}
+                className={
+                  "min-h-11 rounded-lg px-4 text-sm font-semibold text-white " +
+                  (switchesOn.has(c.id) ? "bg-green-600" : "bg-zinc-500")
+                }
+              >
+                {c.label.split("(")[0]}: {switchesOn.has(c.id) ? "ON" : "OFF"}
+              </button>
+            ))}
         </div>
       )}
     </div>
@@ -263,7 +310,7 @@ export function LabClient({ project, mode }: Props) {
           <p className="mt-1 text-zinc-600 dark:text-zinc-400">{project.objective}</p>
           <h3 className="mt-4 font-semibold">Build Steps (hints)</h3>
           <ol className="mt-1 list-decimal space-y-1 pl-5 text-zinc-600 dark:text-zinc-400">
-            {BUILD_STEPS.map((s, i) => (
+            {buildSteps.map((s, i) => (
               <li key={i}>{s}</li>
             ))}
           </ol>
@@ -324,7 +371,7 @@ export function LabClient({ project, mode }: Props) {
       })}
       <p className="pt-2 text-xs text-zinc-500">
         Tap a terminal, then another terminal, to connect a wire. Tap the same terminal twice to cancel.
-        Repeat the same two terminals to remove a wire.
+        Repeat the same two terminals to remove a wire. Drag to rotate the 3D view.
       </p>
     </div>
   );
@@ -388,14 +435,47 @@ export function LabClient({ project, mode }: Props) {
     </div>
   );
 
+  const threeView = (
+    <LabThreeView
+      project={project}
+      placed={placed}
+      wires={wires}
+      pressed={pressed}
+      switchesOn={switchesOn}
+      running={running}
+      coils={sim?.coils ?? {}}
+      lamps={lamps}
+      motor={motorState}
+      energized={energized}
+      activeTerminal={pendingTerminal}
+      faultTerminals={faultTerminals}
+      onTerminalClick={onTerminalClick}
+      onToggleSwitch={toggleSwitch}
+    />
+  );
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {/* Top bar */}
       <div className="flex flex-wrap items-center gap-2 border-b border-zinc-200 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-zinc-900">
-        <Link href={"/project/" + project.slug} className="max-w-[50%] truncate text-sm text-zinc-500 hover:underline">
+        <Link href={"/project/" + project.slug} className="max-w-[40%] truncate text-sm text-zinc-500 hover:underline">
           {project.title}
         </Link>
-        <span className="ml-auto flex flex-wrap items-center gap-2">
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <div className="flex overflow-hidden rounded-lg border border-zinc-300 text-xs dark:border-zinc-700">
+            <button
+              onClick={() => setView3d(true)}
+              className={"px-3 py-2 font-medium " + (view3d ? "bg-blue-600 text-white" : "hover:bg-zinc-100 dark:hover:bg-zinc-800")}
+            >
+              3D
+            </button>
+            <button
+              onClick={() => setView3d(false)}
+              className={"px-3 py-2 font-medium " + (!view3d ? "bg-blue-600 text-white" : "hover:bg-zinc-100 dark:hover:bg-zinc-800")}
+            >
+              2D
+            </button>
+          </div>
           <span className="rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-medium uppercase dark:bg-zinc-800">{mode}</span>
           <Button size="sm" variant={running ? "success" : "primary"} onClick={() => setRunning((r) => !r)}>
             {running ? "Stop" : "Run"}
@@ -412,13 +492,13 @@ export function LabClient({ project, mode }: Props) {
           <Button size="sm" variant="ghost" onClick={reset}>
             Reset
           </Button>
-        </span>
+        </div>
       </div>
 
       {/* Desktop layout */}
       <div className="flex min-h-0 flex-1 max-lg:hidden">
         <aside className="w-64 shrink-0 overflow-y-auto border-r border-zinc-200 dark:border-zinc-800">{toolbox}</aside>
-        <div className="min-w-0 flex-1 p-3">{circuitCanvas}</div>
+        <div className="min-w-0 flex-1 p-3">{view3d ? threeView : circuitCanvas2d}</div>
         <aside className="flex w-96 shrink-0 flex-col border-l border-zinc-200 dark:border-zinc-800">
           {sidePanel}
         </aside>
@@ -429,7 +509,7 @@ export function LabClient({ project, mode }: Props) {
         <div className="min-h-0 flex-1 overflow-y-auto">
           {tab === "circuit" && (
             <>
-              <div className="h-[58vh] p-2">{circuitCanvas}</div>
+              <div className="h-[58vh] p-2">{view3d ? threeView : circuitCanvas2d}</div>
               {checkPanel}
             </>
           )}

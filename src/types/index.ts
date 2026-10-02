@@ -7,13 +7,15 @@ export type ComponentKind =
   | "contactor"
   | "push-button-no"
   | "push-button-nc"
+  | "switch"
+  | "bulb"
   | "overload"
   | "motor";
 
 export interface TerminalSpec {
   id: string;
   label: string;
-  /** Relative position (0-1) on the component box where the terminal sits. */
+  /** Relative position (0-1) on the 2D component box where the terminal sits. */
   position: { x: number; y: number };
   contact?: "NO" | "NC";
 }
@@ -23,7 +25,7 @@ export interface ComponentSpec {
   kind: ComponentKind;
   name: string;
   label: string;
-  /** Physical size in grid cells (60px per cell). */
+  /** 2D size in grid cells (60px per cell). */
   size: { w: number; h: number };
   terminals: TerminalSpec[];
 }
@@ -54,5 +56,6 @@ export interface ProjectSpec {
   workingPrinciple: string;
   safetyNotes: string[];
   vivaQuestions: { id: string; question: string; answer: string }[];
-  scoring: { name: string; points: number }[];
+  /** Data-driven scoring rows; a row passes when ALL its wires are present (and/or no extra wires). */
+  scoring: { name: string; points: number; wires?: [string, string][]; noExtra?: boolean }[];
 }

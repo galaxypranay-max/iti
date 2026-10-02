@@ -19,6 +19,8 @@ interface Props {
   activeTerminal: string | null;
   faultTerminals: Set<string>;
   pressed?: boolean;
+  switchOn?: boolean;
+  lampOn?: boolean;
 }
 
 export function ComponentSymbol({
@@ -32,6 +34,8 @@ export function ComponentSymbol({
   activeTerminal,
   faultTerminals,
   pressed,
+  switchOn,
+  lampOn,
 }: Props) {
   const w = spec.size.w * CELL;
   const h = spec.size.h * CELL;
@@ -62,6 +66,25 @@ export function ComponentSymbol({
             </text>
             <text x={w / 2} y={11} textAnchor="middle" fontSize={8} fill="#71717a">
               {spec.kind === "push-button-nc" ? "NC" : "NO"}
+            </text>
+          </>
+        )}
+
+        {spec.kind === "switch" && (
+          <>
+            <rect width={w} height={h} rx={6} fill="#fafafa" stroke={stroke} strokeWidth={2} />
+            <line x1={w * 0.15} y1={h / 2} x2={w * 0.4} y2={h / 2} stroke={stroke} strokeWidth={2} />
+            <line x1={w * 0.6} y1={h / 2} x2={w * 0.85} y2={h / 2} stroke={stroke} strokeWidth={2} />
+            <line
+              x1={w * 0.4}
+              y1={h / 2}
+              x2={w * 0.6}
+              y2={switchOn ? h * 0.22 : h / 2}
+              stroke={switchOn ? "#dc2626" : stroke}
+              strokeWidth={3}
+            />
+            <text x={w / 2} y={h - 5} textAnchor="middle" fontSize={9} fontWeight={600} fill="#52525b">
+              {spec.label.split("(")[0].trim() + (switchOn ? " ON" : " OFF")}
             </text>
           </>
         )}
@@ -107,6 +130,26 @@ export function ComponentSymbol({
             <rect x={w * 0.3} y={h * 0.6} width={w * 0.4} height={h * 0.3} rx={3} fill={coilOn ? "#dc2626" : "#e4e4e7"} stroke={stroke} />
             <text x={w / 2} y={h * 0.79} textAnchor="middle" fontSize={10} fontWeight={700} fill={coilOn ? "#fff" : "#3f3f46"}>
               {spec.id}
+            </text>
+          </>
+        )}
+
+        {spec.kind === "bulb" && (
+          <>
+            <rect x={w * 0.3} y={h * 0.6} width={w * 0.4} height={h * 0.35} rx={3} fill="#e4e4e7" stroke={stroke} />
+            <circle
+              cx={w / 2}
+              cy={h * 0.38}
+              r={h * 0.24}
+              fill={lampOn ? "#fef08a" : "#f4f4f5"}
+              stroke={lampOn ? "#eab308" : stroke}
+              strokeWidth={2}
+            />
+            {lampOn && <circle cx={w / 2} cy={h * 0.38} r={h * 0.24} fill="#fde047" opacity={0.35} />}
+            <line x1={w * 0.3} y1={h * 0.38} x2={w * 0.44} y2={h * 0.38} stroke={stroke} strokeWidth={1.5} />
+            <line x1={w * 0.56} y1={h * 0.38} x2={w * 0.7} y2={h * 0.38} stroke={stroke} strokeWidth={1.5} />
+            <text x={w / 2} y={h * 0.36} textAnchor="middle" fontSize={9} fontWeight={600} fill={lampOn ? "#a16207" : "#71717a"}>
+              {lampOn ? "ON" : "OFF"}
             </text>
           </>
         )}
