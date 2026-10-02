@@ -4,7 +4,10 @@ export type Mode = "learn" | "practice" | "exam";
 
 export type ComponentKind =
   | "supply"
+  | "supply-3ph"
   | "contactor"
+  | "mcb"
+  | "timer"
   | "push-button-no"
   | "push-button-nc"
   | "switch"
@@ -28,12 +31,18 @@ export interface ComponentSpec {
   /** 2D size in grid cells (60px per cell). */
   size: { w: number; h: number };
   terminals: TerminalSpec[];
+  /** Star contactor: load side terminals join as the star point when energized. */
+  starPoint?: boolean;
+  /** Terminal groups shown in the Terminal Inspector (never invented - from the project definition). */
+  groups?: { title: string; terminalIds: string[] }[];
 }
 
 export interface ProjectSpec {
   id: string;
   slug: string;
   title: string;
+  /** Syllabus section used to group the project library. */
+  section: string;
   shortDescription: string;
   objective: string;
   difficulty: "beginner" | "intermediate" | "advanced";
@@ -44,6 +53,8 @@ export interface ProjectSpec {
     coils: string[];
     auxContacts: { terminalId: string; controlsCoil: string; state: "NO" | "NC" }[];
     interlocks: { from: string; to: string }[];
+    /** Exact wires that implement the interlock(s) - used by the fault detector. */
+    interlockWires?: [string, string][];
     overloadPath: string[];
   };
   simulation: {

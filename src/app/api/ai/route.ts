@@ -8,6 +8,8 @@ const BodySchema = z.object({
   projectSlug: z.string().min(1).max(100),
   mode: z.enum(["learn", "practice", "exam"]).default("learn"),
   question: z.string().min(1).max(2000),
+  // Validator output passed from the client - the AI explains it, never overrides it
+  faults: z.array(z.string().max(300)).max(20).default([]),
 });
 
 // Naive in-memory rate limit (per serverless instance).
@@ -26,29 +28,30 @@ function rateLimited(ip: string): boolean {
   return entry.count > MAX_REQ;
 }
 
+const NL = "\n";
+
 /** Offline/deterministic fallback so the lab still teaches without an API key. */
-function fallbackReply(question: string, slug: string): string {
+function fallbackReply(question: string, slug: string, faults: string[] = []): string {
   const q = question.toLowerCase();
   const project = getProjectBySlug(slug);
   if (!project) return "Please open a practical first, then ask me about it.";
 
-  if (q.includes("not working") || q.includes("hint") || q.includes("galat") || q.includes("mistake")) {
+  if (
+    faults.length > 0 &&
+    (q.includes("not working") || q.includes("galat") || q.includes("mistake") || q.includes("hint") || q.includes("problem") || q.includes("nahi"))
+  ) {
     return [
-      "Troubleshooting checklist for this practical:",
-      "1. Stop button must be NC and in series from Phase L.",
-      "2. Overload NC (95-96) must sit after the Stop button.",
-      "3. Each coil needs: feed through the OTHER contactor's NC 21-22 (interlock) plus its own start button, and A2 back to Neutral.",
-      "4. Latch: the start-button output also feeds the contactor's own NO 13; NO 14 returns to A1.",
-      "5. No wire should go directly from L to N (dead short).",
+      "The circuit validator found these problems:",
+      ...faults.slice(0, 4).map((x, i) => i + 1 + ". " + x),
       "",
-      "Press Check - faulty terminals get highlighted, then fix them one by one.",
-    ].join("\n");
+      "Fix the highlighted terminals/wires one by one, then press Check again.",
+    ].join(NL);
   }
   if (q.includes("explain") && (q.includes("circuit") || q.includes("this"))) {
-    return project.workingPrinciple + "\n\n" + project.explanation;
+    return project.workingPrinciple + NL + NL + project.explanation;
   }
   if (q.includes("contactor") || q.includes("relay")) {
-    return "A power contactor has coil terminals A1-A2, NO auxiliary contacts 13-14 (closed when the coil is energized) and NC auxiliary contacts 21-22 (open when energized). In this practical KM1/KM2 switch the motor and their auxiliary contacts create the latch and the electrical interlock.";
+    return "A power contactor has coil terminals A1-A2, NO auxiliary contacts 13-14 (closed when the coil is energized) and NC auxiliary contacts 21-22 (open when energized). Its main power terminals are 1-2, 3-4 and 5-6. In contactor practicals these contacts create the latch and the electrical interlock.";
   }
   if (q.includes("interlock")) {
     return "Electrical interlocking means each contactor's NC auxiliary contact (21-22) is wired in series with the OTHER contactor's coil. When KM1 is on, its NC is open, so KM2's coil can never get supply - and vice versa. This prevents a phase-to-phase short.";
@@ -56,20 +59,23 @@ function fallbackReply(question: string, slug: string): string {
   if (q.includes("jog") || q.includes("inch")) {
     return "Jogging/inching means the motor runs only while the button is held - the coil circuit bypasses the latching NO contact, so the contactor drops the moment you release the button. Used for precise positioning of machines.";
   }
+  if (q.includes("delta") || q.includes("star-delta") || q.includes("star delta")) {
+    return "In STAR the winding voltage is line voltage / root 3 (about 58%), so starting current drops to about one-third. After the timer delay, DELTA gives each winding the full line voltage for normal running. KM2 and KM3 NC interlocks make sure star and delta never close together.";
+  }
   if (q.includes("viva")) {
     const v = project.vivaQuestions[Math.floor(Math.random() * project.vivaQuestions.length)];
-    return "Viva question: " + v.question + "\n\n(Think first! Then ask again with 'answer' to reveal.)";
+    return "Viva question: " + v.question + NL + NL + "(Think first! Then ask again with 'answer' to reveal.)";
   }
   if (q.includes("safety") || q.includes("safe")) {
-    return project.safetyNotes.map((s, i) => (i + 1) + ". " + s).join("\n");
+    return project.safetyNotes.map((s, i) => i + 1 + ". " + s).join(NL);
   }
   return [
     'I am scoped to "' + project.title + '" only (offline mode - no AI key configured on the server).',
-    "Try: explain this circuit / why is it not working / give me a hint / explain the contactor / interlock / jogging / ask me a viva question.",
-  ].join("\n");
+    "Try: explain this circuit / why is it not working / give me a hint / explain the contactor / interlock / jogging / star delta / ask me a viva question.",
+  ].join(NL);
 }
 
-function buildSystemPrompt(slug: string, mode: string): string {
+function buildSystemPrompt(slug: string, mode: string, faults: string[]): string {
   const p = getProjectBySlug(slug);
   if (!p) return "You are an ITI electrical lab assistant. No project selected.";
   return [
@@ -84,7 +90,10 @@ function buildSystemPrompt(slug: string, mode: string): string {
         ? "Mode: EXAM - do NOT help solve the circuit. Answer only conceptual/safety questions."
         : "Mode: LEARN - explain openly and thoroughly.",
     "Never invent terminal numbers or wiring not in the pairs above. Distinguish simulation from real wiring and remind about safety.",
-  ].join("\n");
+    faults.length
+      ? "Circuit validator output (explain these, do NOT override them): " + faults.join(" | ")
+      : "",
+  ].join(NL);
 }
 
 export async function POST(req: Request) {
@@ -107,14 +116,14 @@ export async function POST(req: Request) {
   if (!parsed.success) {
     return NextResponse.json({ error: "Invalid input" }, { status: 400 });
   }
-  const { projectSlug, mode, question } = parsed.data;
+  const { projectSlug, mode, question, faults } = parsed.data;
   if (!getProjectBySlug(projectSlug)) {
     return NextResponse.json({ error: "Unknown project" }, { status: 400 });
   }
 
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
-    return NextResponse.json({ reply: fallbackReply(question, projectSlug), offline: true });
+    return NextResponse.json({ reply: fallbackReply(question, projectSlug, faults), offline: true });
   }
 
   const model = process.env.OPENROUTER_MODEL ?? "openai/gpt-4o-mini";
@@ -129,19 +138,19 @@ export async function POST(req: Request) {
         model,
         max_tokens: 600,
         messages: [
-          { role: "system", content: buildSystemPrompt(projectSlug, mode) },
+          { role: "system", content: buildSystemPrompt(projectSlug, mode, faults) },
           { role: "user", content: question },
         ],
       }),
       signal: AbortSignal.timeout(25_000),
     });
     if (!res.ok) {
-      return NextResponse.json({ reply: fallbackReply(question, projectSlug), offline: true });
+      return NextResponse.json({ reply: fallbackReply(question, projectSlug, faults), offline: true });
     }
     const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
     const reply = data.choices?.[0]?.message?.content?.trim();
-    return NextResponse.json({ reply: reply || fallbackReply(question, projectSlug) });
+    return NextResponse.json({ reply: reply || fallbackReply(question, projectSlug, faults) });
   } catch {
-    return NextResponse.json({ reply: fallbackReply(question, projectSlug), offline: true });
+    return NextResponse.json({ reply: fallbackReply(question, projectSlug, faults), offline: true });
   }
 }

@@ -21,6 +21,8 @@ interface Props {
   pressed?: boolean;
   switchOn?: boolean;
   lampOn?: boolean;
+  suggestedTerminals?: Set<string>;
+  onSelectComponent?: (id: string) => void;
 }
 
 export function ComponentSymbol({
@@ -36,6 +38,8 @@ export function ComponentSymbol({
   pressed,
   switchOn,
   lampOn,
+  suggestedTerminals,
+  onSelectComponent,
 }: Props) {
   const w = spec.size.w * CELL;
   const h = spec.size.h * CELL;
@@ -43,9 +47,9 @@ export function ComponentSymbol({
   const accent = coilOn ? "#dc2626" : "#52525b";
 
   return (
-    <g>
+    <g onClick={onSelectComponent ? () => onSelectComponent(spec.id) : undefined} style={{ cursor: onSelectComponent ? "pointer" : "default" }}>
       <g transform={"translate(" + x + ", " + y + ")"}>
-        {spec.kind === "supply" && (
+        {(spec.kind === "supply" || spec.kind === "supply-3ph") && (
           <>
             <rect width={w} height={h} rx={6} fill={energized ? "#fee2e2" : "#f4f4f5"} stroke={stroke} strokeWidth={2} />
             <text x={w / 2} y={h / 2 - 4} textAnchor="middle" fontSize={13} fontWeight={700} fill={stroke}>
@@ -85,6 +89,38 @@ export function ComponentSymbol({
             />
             <text x={w / 2} y={h - 5} textAnchor="middle" fontSize={9} fontWeight={600} fill="#52525b">
               {spec.label.split("(")[0].trim() + (switchOn ? " ON" : " OFF")}
+            </text>
+          </>
+        )}
+
+        {spec.kind === "mcb" && (
+          <>
+            <rect width={w} height={h} rx={4} fill="#fafafa" stroke={stroke} strokeWidth={2} />
+            {[0.15, 0.5, 0.85].map((fx, i) => (
+              <g key={i}>
+                <line x1={w * fx} y1={0} x2={w * fx} y2={h * 0.3} stroke={stroke} strokeWidth={2} />
+                <line x1={w * fx} y1={h * 0.7} x2={w * fx} y2={h} stroke={stroke} strokeWidth={2} />
+                <rect x={w * fx - 6} y={h * 0.3} width={12} height={h * 0.4} fill="#e4e4e7" stroke={stroke} />
+              </g>
+            ))}
+            <text x={w / 2} y={h * 0.55} textAnchor="middle" fontSize={9} fontWeight={700} fill="#52525b">
+              MCB
+            </text>
+          </>
+        )}
+
+        {spec.kind === "timer" && (
+          <>
+            <rect width={w} height={h} rx={6} fill="#fafafa" stroke={stroke} strokeWidth={2} />
+            <circle cx={w * 0.35} cy={h * 0.45} r={h * 0.22} fill={coilOn ? "#fbbf24" : "#e4e4e7"} stroke={stroke} />
+            <text x={w * 0.35} y={h * 0.5} textAnchor="middle" fontSize={9} fontWeight={700} fill="#3f3f46">
+              T
+            </text>
+            <text x={w * 0.75} y={h * 0.3} textAnchor="middle" fontSize={8} fill="#71717a">
+              15-16 NC
+            </text>
+            <text x={w * 0.75} y={h * 0.6} textAnchor="middle" fontSize={8} fill="#71717a">
+              15-18 NO
             </text>
           </>
         )}

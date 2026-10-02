@@ -16,7 +16,7 @@ const QUICK_PROMPTS = [
   "Ask me a viva question",
 ];
 
-export function AiPanel({ project, mode }: { project: ProjectSpec; mode: string }) {
+export function AiPanel({ project, mode, faults }: { project: ProjectSpec; mode: string; faults?: string[] }) {
   const [messages, setMessages] = useState<Message[]>([
     {
       role: "assistant",
@@ -40,7 +40,7 @@ export function AiPanel({ project, mode }: { project: ProjectSpec; mode: string 
       const res = await fetch("/api/ai", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectSlug: project.slug, mode, question }),
+        body: JSON.stringify({ projectSlug: project.slug, mode, question, faults: faults ?? [] }),
       });
       const data = await res.json();
       setMessages((m) => [

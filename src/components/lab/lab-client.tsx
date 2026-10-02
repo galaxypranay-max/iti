@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import type { ProjectSpec } from "@/types";
 import { simulate, wireKey, scoreCircuit, type Wire, type Fault } from "@/lib/simulator";
@@ -15,6 +15,7 @@ import {
 import { ComponentSymbol } from "./component-symbol";
 import { LabThreeView } from "./three-view";
 import { AiPanel } from "./ai-panel";
+import { TerminalInspector } from "./terminal-inspector";
 import { VivaPanel } from "./viva-panel";
 import { Button } from "@/components/ui/button";
 
@@ -53,6 +54,9 @@ export function LabClient({ project, mode }: Props) {
   const [checked, setChecked] = useState<{ faults: Fault[]; score?: ScoreRows } | null>(null);
   const [tab, setTab] = useState<Tab>("circuit");
   const [showRef, setShowRef] = useState(false);
+  const [selectedComponent, setSelectedComponent] = useState<string | null>(null);
+  const [selectedWire, setSelectedWire] = useState<string | null>(null);
+  const [timersDone, setTimersDone] = useState<Set<string>>(new Set());
   const lastCoils = useRef<Record<string, boolean>>({});
 
   const placedComponents = project.requiredComponents.filter((c) => placed.has(c.id));
@@ -62,10 +66,41 @@ export function LabClient({ project, mode }: Props) {
       lastCoils.current = {};
       return null;
     }
-    const s = simulate(project, wires, pressed, switchesOn, lastCoils.current);
+    const s = simulate(project, wires, pressed, switchesOn, lastCoils.current, timersDone);
     lastCoils.current = s.coils;
     return s;
-  }, [project, wires, pressed, switchesOn, running]);
+  }, [project, wires, pressed, switchesOn, running, timersDone]);
+
+  // Timer elapses 1.5s after its coil energizes (UI-driven delay, engine stays pure)
+  const timerCoilOn = !!sim?.coils["T"];
+  useEffect(() => {
+    if (!running || !timerCoilOn) return;
+    const t = setTimeout(() => setTimersDone((prev) => new Set(prev).add("T")), 1500);
+    return () => clearTimeout(t);
+  }, [running, timerCoilOn]);
+
+  const suggestedTerminals = useMemo(() => {
+    const s2 = new Set<string>();
+    if (!pendingTerminal) return s2;
+    for (const [a, b] of project.expectedWires) {
+      const k = wireKey(a, b);
+      const wired = wires.some((w) => wireKey(w.from, w.to) === k);
+      if (a === pendingTerminal && !wired) s2.add(b);
+      else if (b === pendingTerminal && !wired) s2.add(a);
+    }
+    return s2;
+  }, [pendingTerminal, project, wires]);
+
+  function selectComponent(id: string) {
+    setSelectedComponent((prev) => (prev === id ? null : id));
+    if (id !== "SB-F" && id !== "SB-R") setSelectedWire(null);
+  }
+
+  function deleteSelectedWire() {
+    if (!selectedWire) return;
+    setWires((ws) => ws.filter((w) => w.id !== selectedWire));
+    setSelectedWire(null);
+  }
 
   const coilOn = (id: string) => !!sim?.coils[id];
   const motorState = sim?.motor ?? "stopped";
@@ -154,6 +189,9 @@ export function LabClient({ project, mode }: Props) {
     setPressed(new Set());
     setSwitchesOn(new Set());
     setChecked(null);
+    setSelectedComponent(null);
+    setSelectedWire(null);
+    setTimersDone(new Set());
   }
 
   function terminalXY(terminalId: string): { x: number; y: number } | null {
@@ -227,6 +265,8 @@ export function LabClient({ project, mode }: Props) {
               stroke={isFault ? "#f59e0b" : live ? "#dc2626" : "#0ea5e9"}
               strokeWidth={isFault || live ? 3.5 : 2.5}
               strokeDasharray={isFault ? "6 4" : undefined}
+              className="cursor-pointer"
+              onClick={() => setSelectedWire(w.id === selectedWire ? null : w.id)}
             />
           );
         })}
@@ -247,6 +287,8 @@ export function LabClient({ project, mode }: Props) {
             pressed={pressed.has(spec.id)}
             switchOn={switchesOn.has(spec.id)}
             lampOn={!!lamps[spec.id]}
+            suggestedTerminals={suggestedTerminals}
+            onSelectComponent={selectComponent}
           />
         ))}
       </svg>
@@ -413,6 +455,16 @@ export function LabClient({ project, mode }: Props) {
 
   const sidePanel = (
     <div className="flex h-full min-h-0 flex-col">
+      <div className="max-h-72 shrink-0 overflow-y-auto border-b border-zinc-200 dark:border-zinc-800">
+        <TerminalInspector
+          project={project}
+          selectedId={selectedComponent}
+          coils={sim?.coils ?? {}}
+          lamps={lamps}
+          switchesOn={switchesOn}
+          running={running}
+        />
+      </div>
       <div className="flex border-b border-zinc-200 dark:border-zinc-800">
         {(["ai", "info"] as const).map((t) => (
           <button
@@ -425,7 +477,7 @@ export function LabClient({ project, mode }: Props) {
         ))}
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {tab === "ai" ? <AiPanel project={project} mode={mode} /> : infoPanel}
+        {tab === "ai" ? <AiPanel project={project} mode={mode} faults={(checked?.faults ?? []).map((x) => x.category.replace(/-/g, " ") + ": " + x.message)} /> : infoPanel}
         {tab === "info" && (
           <div className="border-t border-zinc-200 dark:border-zinc-800">
             <VivaPanel questions={project.vivaQuestions} />
@@ -451,8 +503,22 @@ export function LabClient({ project, mode }: Props) {
       faultTerminals={faultTerminals}
       onTerminalClick={onTerminalClick}
       onToggleSwitch={toggleSwitch}
+      onSelectComponent={selectComponent}
+      onWireSelect={(id) => setSelectedWire(id || null)}
+      suggestedTerminals={suggestedTerminals}
+      selectedWire={selectedWire}
+      selectedComponent={selectedComponent}
     />
   );
+
+  const deleteWireBtn = selectedWire ? (
+    <button
+      onClick={deleteSelectedWire}
+      className="absolute right-6 top-6 z-10 rounded-lg bg-red-600 px-3 py-2 text-xs font-semibold text-white shadow-lg"
+    >
+      Delete selected wire
+    </button>
+  ) : null;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -498,7 +564,10 @@ export function LabClient({ project, mode }: Props) {
       {/* Desktop layout */}
       <div className="flex min-h-0 flex-1 max-lg:hidden">
         <aside className="w-64 shrink-0 overflow-y-auto border-r border-zinc-200 dark:border-zinc-800">{toolbox}</aside>
-        <div className="min-w-0 flex-1 p-3">{view3d ? threeView : circuitCanvas2d}</div>
+        <div className="relative min-w-0 flex-1 p-3">
+          {view3d ? threeView : circuitCanvas2d}
+          {deleteWireBtn}
+        </div>
         <aside className="flex w-96 shrink-0 flex-col border-l border-zinc-200 dark:border-zinc-800">
           {sidePanel}
         </aside>
@@ -509,12 +578,27 @@ export function LabClient({ project, mode }: Props) {
         <div className="min-h-0 flex-1 overflow-y-auto">
           {tab === "circuit" && (
             <>
-              <div className="h-[58vh] p-2">{view3d ? threeView : circuitCanvas2d}</div>
+              <div className="relative h-[58vh] p-2">
+                {view3d ? threeView : circuitCanvas2d}
+                {deleteWireBtn}
+              </div>
+              {selectedComponent && (
+                <div className="border-t border-zinc-200 dark:border-zinc-800">
+                  <TerminalInspector
+                    project={project}
+                    selectedId={selectedComponent}
+                    coils={sim?.coils ?? {}}
+                    lamps={lamps}
+                    switchesOn={switchesOn}
+                    running={running}
+                  />
+                </div>
+              )}
               {checkPanel}
             </>
           )}
           {tab === "components" && toolbox}
-          {tab === "ai" && <div className="h-[75vh]"><AiPanel project={project} mode={mode} /></div>}
+          {tab === "ai" && <div className="h-[75vh]"><AiPanel project={project} mode={mode} faults={(checked?.faults ?? []).map((x) => x.category.replace(/-/g, " ") + ": " + x.message)} /></div>}
           {tab === "info" && (
             <>
               {infoPanel}
